@@ -1,1 +1,58 @@
+# === custom ===
 mesh/
+
+# === ROS2 Build ===
+build/
+install/
+log/
+*.log
+
+# === Colcon Workspace ===
+.colcon/
+colcon_ws/
+*.colcon_install_layout
+
+# === CMake and Python Caches ===
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# === ROS Messages ===
+*.pb.cc
+*.pb.h
+
+# === VCS Metadata ===
+*.swp
+*.swo
+*.swn
+*.bak
+
+# === Mesh and Pointcloud Files ===
+*.ply
+*.pcd
+*.stl
+*.obj
+*.dae
+
+# === RViz / Gazebo Configs ===
+*.rviz
+*.world
+*.launch.py~
+
+# === ROS bag files ===
+*.bag
+*.bag.active
+*.db3
+
+# === IDEs and Editors ===
+.vscode/
+.idea/
+*.code-workspace
+
+# === Misc ===
+*.DS_Store
