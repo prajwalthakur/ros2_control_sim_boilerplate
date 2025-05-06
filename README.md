@@ -27,6 +27,7 @@ To launch multiple shells in docker container **template**, run the following
 1. make sure you are in ros2 workspace. If you have followed above steps then currently you will be at `root/workspace/src/`
 1. change the directory to `root/workspace/`
 2. run `colcon build --symlink-install`
+3. source `install/setup.bash`
 
 
 ## Steps to run the simulation in simple python and Matplotlib simulation

@@ -56,7 +56,7 @@ apt-get install ignition-fortress
 # Source by default
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /root/.bashrc
 RUN echo "source /root/workspace/install/setup.bash" >> /root/.bashrc
-RUN echo "TURTLEBOT3_MODEL=burger">>/root/.bashrc
+RUN echo "export TURTLEBOT3_MODEL=burger">>/root/.bashrc
 RUN pip3 install -U colcon-common-extensions \
     && apt-get install -y build-essential python3-rosdep
 
