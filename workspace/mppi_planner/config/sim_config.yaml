@@ -1,0 +1,24 @@
+# config.yaml
+# @@ use jax.generator for reproducibility
+seed: 223 #113   use: 223, 7 obs in b/w , 1 : free
+num_obs: 50             # number of obstacles
+robot_r: 0.23            # robot radius [m]
+cell_size: 0.4          # = 2 * robot_r
+dim_st: 2               # state dimension
+dim_ctrl: 2             # control dimension
+obs_r: 0.24             # = cell_size/2 + 0.01
+obs_h : 2.0
+pose_lim:               # [xmin,ymin],[xmax,ymax]
+  - [-4, -4]
+  - [4,  4]
+noise_std_dev: 0.05     # noise standard deviation
+noise_max_limit: 0.10   # = 2 * noise_std_dev
+ctrl_limit: 0.182842712474619  # = sqrt(2)*robot_r - noise_max_limit
+obs_array:
+  - [2.0,  0.0]
+  - [-2.0, 0.0]
+  - [0.0,  2.0]
+  - [0.0, -2.0]
+  - [2.0, -2.0]
+  - [2.0,  2.0]
+  - [-2.0, -2.0]

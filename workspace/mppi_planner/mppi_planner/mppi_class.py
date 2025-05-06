@@ -12,16 +12,44 @@ config.update("jax_debug_nans", True)
 config.update("jax_enable_x64", True)
 config.update('jax_default_matmul_precision', 'high')
 
-
+import matplotlib.pyplot as plt
 # https://arxiv.org/pdf/2307.09105
 import ghalton
 import scipy.special as scsp
 import scipy.interpolate as si
 import pdb
 import copy
+import yaml
+
+with open('src/mppi_planner/config/sim_config.yaml', 'r') as f:
+    cfg = yaml.safe_load(f)
+
+# 2) Extract values
+seed            = cfg['seed']
+num_obs         = cfg['num_obs']
+robot_r         = cfg['robot_r']
+cell_size       = cfg['cell_size']
+dim_st          = cfg['dim_st']
+dim_ctrl        = cfg['dim_ctrl']
+obs_r           = cfg['obs_r']
+pose_lim        = jnp.array(cfg['pose_lim'])        # shape (2,2)
+noise_std_dev   = cfg['noise_std_dev']
+noise_max_limit = cfg['noise_max_limit']
+obs_array  = jnp.array(cfg['obs_array'])
+# 3) ctrl_limit either read directly or recompute:
+ctrl_limit      = cfg.get(
+    'ctrl_limit',
+    (jnp.sqrt(2) * robot_r) - noise_max_limit
+)
+
+
+
+
+
+
 
 class MPPI:
-    def __init__(self,pose_lim,start,goal,obs_array,robot_r,obs_r,noise_std_dev,noise_max_limit,dim_st,dim_ctrl,ctrl_max,mppi_key):
+    def __init__(self,start,goal,mppi_key):
         self.curr_st = start
         self.goal = goal
         self.obs = obs_array   # num of obstacle
@@ -35,9 +63,9 @@ class MPPI:
         self.key = mppi_key
         self.control_pert_key,self.key = jax.random.split(self.key,2)
         self.pose_limit = pose_lim
-        self.ctrl_max_limit = ctrl_max
-        self.ctrl_min_limit = -ctrl_max
-        self.ctrl_limit = jnp.array(([[self.ctrl_min_limit,self.ctrl_max_limit],[self.ctrl_min_limit,self.ctrl_max_limit]]))
+        # self.ctrl_max_limit = ctrl_max
+        # self.ctrl_min_limit = -ctrl_max
+        self.ctrl_limit = jnp.array(([[0.01 , 1.0 ],[-0.3,0.3]]))
         self.init_mppi()
         
 
@@ -55,7 +83,9 @@ class MPPI:
         #if k=1 sigma = control_limit ; 68% of samples within the control-limit
         #k=2 95% of samples within the control-limit
         self.k = 2
-        self.control_cov = ((self.ctrl_max_limit/self.k)**2)*jnp.diag(np.array([1,1]))    # speeed , angular-speed 
+        self.control_cov = jnp.diag(np.array([((self.ctrl_limit[0,1]/self.k)**2),
+                                              ((self.ctrl_limit[1,1]/self.k)**2)]
+                                             ))    # speeed , angular-speed 
         self.control_mean =  jnp.zeros((2,1))
         self.sampling_type = "gaussian_halton"
         self.horizon_length  = 10  
@@ -196,9 +226,15 @@ class MPPI:
     
     @functools.partial(jax.jit, static_argnums=0) 
     def dynamics_step(self,st:jnp.array,ut:jnp.array):
-        st = st + ut
+        # st = st + ut
+        # return st
+        dt = self.ctrTs
+        xdot = ut[0:,0]*jnp.cos(st[0:,2])
+        ydot = ut[0:,0]*jnp.sin(st[0:,2])
+        omega_dot = ut[0:,1]
+        Xdot = jnp.stack((xdot,ydot,omega_dot),axis=1)
+        st = st + Xdot*dt
         return st
-
     
     
     @functools.partial(jax.jit, static_argnums=0) 
@@ -209,15 +245,7 @@ class MPPI:
         dist_to_goal =    jnp.linalg.norm( s_t - goal_pose )
         is_reached = is_goal_reached*jnp.where(dist_to_goal<=self.goal_tolerance,0.0,1)
         cost_to_goal = is_reached*dist_to_goal*self.stage_goal_cost_weight*1.0 
-        
-        #states-lim cost
-        #pdb.set_trace()
-        lower, upper   = self.pose_limit[0,0:].reshape((self.dim_st,1)), self.pose_limit[1,0:].reshape((self.dim_st,1))     # keep (2,1) shape
-        out_of_bounds  = jnp.logical_or(s_t < lower, s_t > upper)              # (2,1) bool
-        state_violate  = out_of_bounds.any()                                   # scalar bool
-        cost_limits    = state_violate.astype(jnp.float32) * self.state_limit_cost_weight        
-        # final_cost = final_cost[jnp.newaxis,...]
-        final_cost = cost_obs + cost_to_goal + cost_limits
+        final_cost = cost_obs + cost_to_goal 
         return final_cost,is_reached
     
     @functools.partial(jax.jit, static_argnums=0)
