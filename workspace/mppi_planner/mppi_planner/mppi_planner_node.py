@@ -15,18 +15,42 @@ import yaml
 import time
 
 #configuration file
-with open('src/mppi_planner/config/sim_config.yaml', 'r') as f:
+CONFIG_PATH = 'src/mppi_planner/config/sim_config.yaml'
+# Load core parameters from YAML
+with open(CONFIG_PATH, 'r') as f:
     cfg = yaml.safe_load(f)
-seed            = cfg['seed']
-goal_tolerance  = cfg['goal_tolerance']
-dim_euclid = cfg['dim_euclid']
-dim_ctrl = cfg['dim_ctrl']
-horizon_length = cfg['horizon_length']
-mppi_num_rollouts = cfg['mppi_num_rollouts']
-planning_dt = cfg['dt']
+
+seed                     = int(cfg['seed'])
+goal                     = jnp.array(cfg['goal'])
+dt                       = float(cfg['dt'])
+robot_r                  = float(cfg['robot_r'])
+dim_st                   = int(cfg['dim_st'])
+dim_ctrl                 = int(cfg['dim_ctrl'])
+obs_r                    = float(cfg['obs_r'])
+obs_buffer               = float(cfg['obs_buffer'])
+obs_h                    = float(cfg['obs_h'])
+goal_tolerance           = float(cfg['goal_tolerance'])
+horizon_length           = int(cfg['horizon_length'])
+mppi_num_rollouts        = int(cfg['mppi_num_rollouts'])
+pose_lim                 = jnp.array(cfg['pose_lim'])
+obs_array                = jnp.array(cfg['obs_array'])
+num_obs                  = int(cfg['num_obs'])
+dim_euclid               = int(cfg['dim_euclid'])
+noise_std_dev            = float(cfg['noise_std_dev'])
+knot_scale               = int(cfg['knot_scale'])
+degree                   = int(cfg['degree'])
+beta                     = float(cfg['beta'])
+beta_u_bound             = float(cfg['beta_u_bound'])
+beta_l_bound             = float(cfg['beta_l_bound'])
+param_exploration        = float(cfg['param_exploration'])
+update_beta              = bool(cfg['update_beta'])
+sampling_type            = cfg['sampling_type']
+collision_cost_weight    = float(cfg['collision_cost_weight'])
+stage_goal_cost_weight   = float(cfg['stage_goal_cost_weight'])
+terminal_goal_cost_weight= float(cfg['terminal_goal_cost_weight'])
 
 ### set goal
-GOAL = jnp.array([+3,+3,0.0])
+GOAL = goal
 ####
 
 class SimplePlanner(Node):
@@ -42,7 +66,7 @@ class SimplePlanner(Node):
         self.goal = GOAL
         self.init = False
         self.current_pose = None
-        timer_period = planning_dt  # 1/(planning rate) currently ~ 10hz
+        timer_period = dt  # 1/(planning rate) currently ~ 10hz
         
         # timer to call planning function
         self.control_timer = self.create_timer(timer_period, self.control_cb)
@@ -146,7 +170,7 @@ class SimplePlanner(Node):
         X_optimal_seq = np.zeros((horizon_length,dim_ctrl))
         X_rollout = np.zeros((mppi_num_rollouts,horizon_length,dim_ctrl))
         if self.init is True:
-            dist_to_goal = jnp.linalg.norm(self.current_pose - self.goal)
+            dist_to_goal = jnp.linalg.norm(self.current_pose[0:dim_euclid] - self.goal[0:dim_euclid])
             if( dist_to_goal<= goal_tolerance):
                 optimal_control = np.zeros((dim_ctrl,1))
             else:

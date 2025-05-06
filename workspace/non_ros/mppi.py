@@ -166,7 +166,7 @@ class MPPI:
         total_cost = nominal_mppi_cost 
         #@ compute the weights for the delta-controls    
         wght ,eta  = self.compute_weights(total_cost)
-        temp =  jnp.sum(wght[:,None]*delta_u,axis=0)  #weight the delta-controls with the weights
+        temp =  jnp.sum(wght[:,None]*delta_u,axis=0)  #weighted delta-controls 
         temp =  self._moving_average_filter(xx=temp,window_size=5) # smooth out the delta-controls
         
         self.U_seqs +=temp  # next-control += prev_control + delta-control
