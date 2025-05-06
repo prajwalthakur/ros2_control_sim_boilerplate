@@ -1,0 +1,8 @@
+.DS_Store
+*.so
+*.pyc
+
+doc/_build
+build
+dist
+env/

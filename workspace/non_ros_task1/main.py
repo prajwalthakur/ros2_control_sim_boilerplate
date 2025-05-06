@@ -95,7 +95,10 @@ if __name__ == "__main__":
     MppiObj  = MPPI(pose_lim,start,goal,obs_array,robot_r,obs_r,noise_std_dev,noise_max_limit,dim_st,dim_ctrl,ctrl_limit,mppi_key)
     st = copy.deepcopy(start)
     while(np.linalg.norm(st-goal)>0.1):
+        start = time.time()
         optimal_control, X_optimal_seq,X_rollout= MppiObj.compute_control(st)
+        end = time.time()
+        print(" took ", end-start)
         key,curr_key = jax.random.split(key, 2)
         st = VisualizerObj.step(optimal_control, X_optimal_seq,X_rollout )
         #pdb.set_trace()
