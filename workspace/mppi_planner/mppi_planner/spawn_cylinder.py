@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+#@@ script for spwaning cylindrical obstacles in gazebo
 import rclpy
 from rclpy.node import Node
 from gazebo_msgs.srv import SpawnEntity
 from geometry_msgs.msg import Pose
+import yaml
+import numpy as np
 
 # A simple SDF template for a cylinder of given radius and height
 CYLINDER_SDF = """<?xml version='1.0'?>
@@ -71,8 +74,6 @@ class CylinderSpawner(Node):
                 )
 
 
-import yaml
-import numpy as np
 with open('src/mppi_planner/config/sim_config.yaml', 'r') as f:
     cfg = yaml.safe_load(f)
 obs_array  = np.array(cfg['obs_array'])

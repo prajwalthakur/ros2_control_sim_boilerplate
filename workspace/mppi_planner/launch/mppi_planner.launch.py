@@ -1,20 +1,11 @@
+import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
-import os
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.substitutions import LaunchConfiguration, Command
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import LifecycleNode
-from launch_ros.actions import Node
-from launch.conditions import IfCondition, UnlessCondition
 
-from launch import LaunchDescription
-from launch_ros.actions import Node
-import os
-from ament_index_python.packages import get_package_share_directory
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+##@@ Launch file to spawn turtlebot in an empty world and cylindrical obstacles
 def generate_launch_description():
     config_dir = os.path.join(get_package_share_directory('mppi_planner'), 'config')
     rviz_config_dir = os.path.join(config_dir, 'navigation.rviz')

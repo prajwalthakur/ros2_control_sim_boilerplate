@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
-from gazebo_msgs.msg import ModelStates
-from geometry_msgs.msg import PoseStamped
-import math
-from nav_msgs.msg import Odometry
-from mppi_class import MPPI
+from geometry_msgs.msg import Twist, PoseStamped, Point
+from visualization_msgs.msg import Marker
+from nav_msgs.msg import Path, Odometry
+from tf_transformations import euler_from_quaternion  
+
+
+from mppi_planner.mppi_class import MPPI
 import jax
 import jax.numpy as jnp
-
+import numpy as np
 import yaml
+import time
+
+#configuration file
 with open('src/mppi_planner/config/sim_config.yaml', 'r') as f:
     cfg = yaml.safe_load(f)
 seed            = cfg['seed']
+goal_tolerance  = cfg['goal_tolerance']
+dim_euclid = cfg['dim_euclid']
+dim_ctrl = cfg['dim_ctrl']
+horizon_length = cfg['horizon_length']
+mppi_num_rollouts = cfg['mppi_num_rollouts']
+planning_dt = cfg['dt']
+
+### set goal
+GOAL = jnp.array([+3,+3,0.0])
+####
 
 class SimplePlanner(Node):
     def __init__(self):
@@ -25,35 +39,126 @@ class SimplePlanner(Node):
             self.odom_callback,
             10
         )
-        self.goal = jnp.array([3,3])
+        self.goal = GOAL
         self.init = False
         self.current_pose = None
-        timer_period = 0.1  # seconds
+        timer_period = planning_dt  # 1/(planning rate) currently ~ 10hz
+        
+        # timer to call planning function
         self.control_timer = self.create_timer(timer_period, self.control_cb)
+        
+        # visualization utility
+        self.path_pub = self.create_publisher(Path,  '/mppi/robot_path',   10)
+        self.opt_pub  = self.create_publisher(Marker,  '/mppi/opt_rollout',     10)
+        self.roll_pub = self.create_publisher(Marker,'/mppi/rollouts',     10)
+        self.robot_path = Path()
+        self.robot_path.header.frame_id = 'odom'
 
     def odom_callback(self, msg: Odometry):
         """Callback to handle incoming odometry messages."""
         current_pose = msg.pose.pose
+        q = current_pose.orientation
+        quaternion = [q.x, q.y, q.z, q.w]
+
+        # Convert to Euler angles
+        roll, pitch, yaw = euler_from_quaternion(quaternion)
         self.get_logger().debug(
             f'Received odom: position=({current_pose.position.x:.2f}, '
             f'{current_pose.position.y:.2f})'
         )
-        self.current_pose  = jnp.array([current_pose.position.x,current_pose.position.y])
+        self.current_pose  = jnp.array([current_pose.position.x,current_pose.position.y,yaw])
+        # Create a deterministic PRNGKey from our fixed seed so that MPPI sampling is reproducible.
+        # Then split it into two independent keys:
+        #  - mppi_key: used for generating control perturbations
+        #  - goal_key: reserved for any goal‐related randomness
         key = jax.random.PRNGKey(seed)
         mppi_key,goal_key  = jax.random.split(key, 2)
         if self.init is False:
             start =  self.current_pose
-            self.MppiObj  = MPPI(start,self.goal,mppi_key)
+            self.MppiObj  = MPPI(start,mppi_key)
             self.init = True
+            
+    # function to plot traced path, optimal predicted path and MPPI trajectory rollouts        
+    def publish_path_utils(self, X_optimal_seq, X_rollout, num_to_vis=20):
+        now = self.get_clock().now().to_msg()
+
+        # 1) Robot’s past path
+        self.robot_path.header.stamp = now
+        ps = PoseStamped()
+        ps.header.stamp = now
+        ps.header.frame_id = 'odom'
+        ps.pose.position.x = float(self.current_pose[0])
+        ps.pose.position.y = float(self.current_pose[1])
+        ps.pose.orientation.w = 1.0
+        self.robot_path.poses.append(ps)
+        self.path_pub.publish(self.robot_path)
+
+        
+        opt_marker = Marker()
+        opt_marker.header.stamp = now
+        opt_marker.header.frame_id = 'odom'
+        opt_marker.ns = 'mpii_optimal_rollout'
+        opt_marker.id = 0
+        opt_marker.type = Marker.LINE_LIST
+        opt_marker.action = Marker.ADD
+        opt_marker.scale.x = 0.02  
+        opt_marker.color.r = 1.0
+        opt_marker.color.g = 0.0
+        opt_marker.color.b = 0.0
+        opt_marker.color.a = 1.0        
+        for i in range(X_optimal_seq.shape[0] - 1):
+            p0 = X_optimal_seq[i,:]
+            p1 = X_optimal_seq[i+1,:]
+            opt_marker.points.append(Point(x=float(p0[0]), y=float(p0[1]), z=0.0))
+            opt_marker.points.append(Point(x=float(p1[0]), y=float(p1[1]), z=0.0))        
+        self.opt_pub.publish(opt_marker)
+
+        #  MPPI rollouts as a Marker (LINE_LIST)
+        marker = Marker()
+        marker.header.stamp = now
+        marker.header.frame_id = 'odom'
+        marker.ns = 'mpii_rollouts'
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+        marker.scale.x = 0.02  # line width
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 0.1
+
+        # Only visualize num_to_vis rollouts
+        step = int(X_rollout.shape[0]/num_to_vis)
+        for itr in  range(0,X_rollout.shape[0],step):
+            rollout = X_rollout[itr]
+            # rollout is [H x 2], draw segments between consecutive points
+            for i in range(rollout.shape[0] - 1):
+                p0 = rollout[i]
+                p1 = rollout[i+1]
+                marker.points.append(Point(x=float(p0[0]), y=float(p0[1]), z=0.0))
+                marker.points.append(Point(x=float(p1[0]), y=float(p1[1]), z=0.0))
+
+        self.roll_pub.publish(marker)    
+        
     def control_cb(self):
         twist = Twist()
-        if self.init is False:
-            optimal_control, X_optimal_seq,X_rollout = self.MppiObj.compute_control(self.current_pose)
+        print("in control cb")
+        X_optimal_seq = np.zeros((horizon_length,dim_ctrl))
+        X_rollout = np.zeros((mppi_num_rollouts,horizon_length,dim_ctrl))
+        if self.init is True:
+            dist_to_goal = jnp.linalg.norm(self.current_pose - self.goal)
+            if( dist_to_goal<= goal_tolerance):
+                optimal_control = np.zeros((dim_ctrl,1))
+            else:
+                start = time.time()
+                optimal_control, X_optimal_seq,X_rollout = self.MppiObj.compute_control(self.current_pose,self.goal)
+                self.get_logger().info(f'time took to compute control commands ={time.time()-start}')
+            self.publish_path_utils(X_optimal_seq,X_rollout,num_to_vis=20)
             twist.linear.x = optimal_control[0][0]
             twist.angular.z = optimal_control[1][0]
             self.cmd_vel_pub.publish(twist)
             self.get_logger().info(f'Published cmd_vel: linear.x={twist.linear.x:.2f},angular.z={twist.angular.z:.2f}')
-    
+            self.get_logger().info(f'euclid dist to goal={dist_to_goal:.2f}')
         
 
 def main():

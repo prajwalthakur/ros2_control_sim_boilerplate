@@ -76,7 +76,7 @@ class vis_dynamics:
         self.ax.grid(True,)
         # • horizon (optimal sequence) – thick orange line
         self.opt_line, = self.ax.plot([], [], lw=3, color='red',
-                                    label='optimal path')
+                                    label='optimal predicted path')
 
         # • perturbed roll‑outs – very light grey for all 100
         self.rollout_lines = []
@@ -85,7 +85,7 @@ class vis_dynamics:
             line, = self.ax.plot([], [], lw=1, color='grey', alpha=0.30,label=label)
             self.rollout_lines.append(line)   
         
-        label = "robot path" if self.plot_itr == 0 else "_nolegend_"
+        label = "traced robot path" if self.plot_itr == 0 else "_nolegend_"
         self.path_patch = patches.Circle((self.init_pose[0,0], self.init_pose[1,0]), radius=0.03, fc='purple', alpha=1.0,label= label)
         self.ax.add_patch(self.path_patch)
         self.ax.legend(loc="upper right", framealpha=0.9)

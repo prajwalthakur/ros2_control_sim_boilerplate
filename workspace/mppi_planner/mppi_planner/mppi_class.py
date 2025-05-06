@@ -36,6 +36,12 @@ pose_lim        = jnp.array(cfg['pose_lim'])        # shape (2,2)
 noise_std_dev   = cfg['noise_std_dev']
 noise_max_limit = cfg['noise_max_limit']
 obs_array  = jnp.array(cfg['obs_array'])
+dt = cfg['dt']
+dim_euclid = cfg['dim_euclid']
+goal_tolerance = cfg['goal_tolerance']
+horizon_length = cfg['horizon_length']
+mppi_num_rollouts = cfg['mppi_num_rollouts']
+obs_buffer = cfg['obs_buffer']
 # 3) ctrl_limit either read directly or recompute:
 ctrl_limit      = cfg.get(
     'ctrl_limit',
@@ -43,15 +49,10 @@ ctrl_limit      = cfg.get(
 )
 
 
-
-
-
-
-
 class MPPI:
-    def __init__(self,start,goal,mppi_key):
+    def __init__(self,start,mppi_key):
         self.curr_st = start
-        self.goal = goal
+        
         self.obs = obs_array   # num of obstacle
         self.num_obs = self.obs.shape[0]
         self.dim_st = dim_st  # state dimension
@@ -63,17 +64,17 @@ class MPPI:
         self.key = mppi_key
         self.control_pert_key,self.key = jax.random.split(self.key,2)
         self.pose_limit = pose_lim
-        # self.ctrl_max_limit = ctrl_max
-        # self.ctrl_min_limit = -ctrl_max
-        self.ctrl_limit = jnp.array(([[0.01 , 1.0 ],[-0.3,0.3]]))
+        self.ctrlTs = dt
+        self.dim_euclid =  dim_euclid
+        self.ctrl_limit = jnp.array(([[0.0 , 0.8 ],[-0.32,0.32]]))
         self.init_mppi()
         
 
 
     
     def init_mppi(self):
-        self.stage_cost_vmap = jit(vmap(self.stage_cost,in_axes=(0,0,None,None)))
-        self.terminal_cost_vmap = jit(vmap(self.terminal_cost,in_axes=(0,0,None,None)))
+        self.stage_cost_vmap = jit(vmap(self.stage_cost,in_axes=(0,0,0,None,None)))
+        self.terminal_cost_vmap = jit(vmap(self.terminal_cost,in_axes=(0,0,0,None,None)))
         self.dynamics_step_vmap = jit(vmap(self.dynamics_step,in_axes=(0,)))
         #self.dynamics_vmap = jax.jit(jax.vmap(self.dynamics, in_axes=0))  # batch rollouts
         #ctrl_limit = functools.partial(self.control_clip, ctrl_limit=self.ctrl_limit)  # freeze the constant
@@ -88,8 +89,8 @@ class MPPI:
                                              ))    # speeed , angular-speed 
         self.control_mean =  jnp.zeros((2,1))
         self.sampling_type = "gaussian_halton"
-        self.horizon_length  = 10  
-        self.mppi_num_rollouts =100
+        self.horizon_length  = horizon_length
+        self.mppi_num_rollouts =mppi_num_rollouts
         self.knot_scale = 2
         self.n_knots = self.horizon_length//self.knot_scale
         self.ndims = self.n_knots*self.dim_ctrl
@@ -97,18 +98,20 @@ class MPPI:
         self.beta = 7
         self.beta_u_bound = 10
         self.beta_l_bound = 5
-        self.param_exploration = 0.2
+        #self.param_exploration = 0.2
         self.update_beta = True
         seed = int(self.key[0]) 
         self.sequencer = ghalton.GeneralizedHalton(self.ndims, seed)        
         self.U_seqs =  jnp.zeros((self.horizon_length,2))  
-        self.goal_tolerance  = 0.4
-
+        
+        self.goal_tolerance  = goal_tolerance         # euclidean goal tolerance in meters
+        self.goal_tolerance_orient = 0.1   # orientation goal tolerance in radians
+        self.obs_buffer = obs_buffer
         self.collision_cost_weight = 50
-        self.stage_goal_cost_weight = 2
-        self.state_limit_cost_weight =  100
-        self.terminal_goal_cost_weight = 10
-        self.weight_goal = np.diag([5,5,0])    
+        self.stage_goal_cost_weight = 5
+        self.stage_goal_cost_weight_orient = 1e-2
+        self.terminal_goal_cost_weight = 10.0
+        self.terminal_goal_cost_weight_orient  = 1e-2
     
  
     #https://arxiv.org/pdf/2307.09105    , # https://proceedings.mlr.press/v164/bhardwaj22a.html
@@ -148,12 +151,14 @@ class MPPI:
         return wt ,eta  
 
         
-    def compute_control(self,curr_st):
-        assert curr_st.shape == (self.dim_st,1)
+    def compute_control(self,curr_st,goal):
+        curr_st = curr_st.reshape((self.dim_st,1))
+        goal = goal.reshape((self.dim_st,1))
+        assert curr_st.shape == (self.dim_st,1) and goal.shape == (self.dim_st,1)
         self.control_pert_key,current_key = jax.random.split(self.key,2)
         delta_u = self.control_pertubations(control_mean=self.control_mean, control_cov= self.control_cov, sampling_type=self.sampling_type,key=current_key)
         predicted_obs_array = self.obs
-        goal_pose = self.goal
+        goal_pose = goal
         previous_control = self.U_seqs
         nominal_mppi_cost , perturbed_control , delta_u = self.cal_nominal_mppi_cost(curr_st,predicted_obs_array,goal_pose,previous_control, delta_u)
 
@@ -179,12 +184,12 @@ class MPPI:
 
 
         optimal_control  = u_filtered[0,0:].reshape((self.dim_ctrl,1))
-        X_optimal_seq = np.zeros((self.horizon_length+1,2))
+        X_optimal_seq = np.zeros((self.horizon_length+1,self.dim_st))
         X_optimal_seq[0,0:] = curr_st.squeeze()
-        X_rollout = np.zeros((self.mppi_num_rollouts,self.horizon_length+1,2))
+        X_rollout = np.zeros((self.mppi_num_rollouts,self.horizon_length+1,self.dim_st))
         X_rollout[:,0,0:] = jnp.tile(curr_st.T , (self.mppi_num_rollouts,1))
         for i in range(1,self.horizon_length+1):
-            X_optimal_seq[i,0:] = self.dynamics_step(X_optimal_seq[i-1,0:].reshape((self.dim_st,1)),u_filtered[i-1,0:].reshape((self.dim_ctrl,1))).squeeze()
+            X_optimal_seq[i,0:] = self.dynamics_step_single_pred(X_optimal_seq[i-1,0:].reshape((self.dim_st,1)),u_filtered[i-1,0:].reshape((self.dim_ctrl,1))).squeeze()
             X_rollout[:,i,0:] = self.dynamics_step(X_rollout[:,i-1,0:],perturbed_control[:,i,0:])
         return optimal_control, X_optimal_seq,X_rollout
     
@@ -205,18 +210,19 @@ class MPPI:
         seq_cost =  jnp.zeros((self.mppi_num_rollouts,1))
         
         
-        is_goal_reached = jnp.ones((self.mppi_num_rollouts,1))
+        is_goal_reached = jnp.zeros((self.mppi_num_rollouts,1))
+        is_goal_reached_orient = jnp.zeros((self.mppi_num_rollouts,1))
         for itr in range(0,self.horizon_length):
             # print(state_tensor[0])
             state_tensor= self.dynamics_step(state_tensor,U_current_tensor[:,itr,:,jnp.newaxis])
             # print(U_current_tensor[0,0])
             # print(state_tensor[0])
            
-            stage_cost,prev_is_reached = self.stage_cost_vmap(state_tensor,is_goal_reached,goal_array,predicted_obs_state)
+            stage_cost,is_goal_reached,is_goal_reached_orient = self.stage_cost_vmap(state_tensor,is_goal_reached,is_goal_reached_orient,goal_array,predicted_obs_state)
             # print("state-violation", state_violate )
             seq_cost += stage_cost
 
-        stage_cost = self.terminal_cost_vmap(state_tensor,prev_is_reached,goal_array , predicted_obs_state)    
+        stage_cost = self.terminal_cost_vmap(state_tensor,is_goal_reached,is_goal_reached_orient,goal_array , predicted_obs_state)    
         seq_cost+=stage_cost 
         #seq_cost += seq_cost.mean()
         delta_u = U_current_tensor-U_prev_seqs_tensor
@@ -226,9 +232,7 @@ class MPPI:
     
     @functools.partial(jax.jit, static_argnums=0) 
     def dynamics_step(self,st:jnp.array,ut:jnp.array):
-        # st = st + ut
-        # return st
-        dt = self.ctrTs
+        dt = self.ctrlTs
         xdot = ut[0:,0]*jnp.cos(st[0:,2])
         ydot = ut[0:,0]*jnp.sin(st[0:,2])
         omega_dot = ut[0:,1]
@@ -236,23 +240,48 @@ class MPPI:
         st = st + Xdot*dt
         return st
     
+    @functools.partial(jax.jit, static_argnums=0) 
+    def dynamics_step_single_pred(self,st:jnp.array,ut:jnp.array):
+        # st = st + ut
+        # return st
+        st  = st.T
+        ut  = ut.T
+        dt = self.ctrlTs
+        xdot = ut[0:,0]*jnp.cos(st[0:,2])
+        ydot = ut[0:,0]*jnp.sin(st[0:,2])
+        omega_dot = ut[0:,1]
+        Xdot = jnp.stack((xdot,ydot,omega_dot),axis=1)
+        st = st + Xdot*dt
+        return st.T    
     
     @functools.partial(jax.jit, static_argnums=0) 
-    def stage_cost(self,s_t,is_goal_reached,goal_pose,obstacle_array):        
-        dist_to_obs = jnp.linalg.norm(jnp.asarray([obstacle_array -  s_t.T]),axis=-1).T   # num_obs x 1
-        cost_obs = jnp.where(dist_to_obs < self.obs_r + self.robot_r + 0.05,1.0,0)*self.collision_cost_weight
+    def stage_cost(self,s_t,is_goal_reached,is_reached_orient,goal_pose,obstacle_array):       
+        
+        # eulcid distance to the obstacle
+        dist_to_obs = jnp.linalg.norm(jnp.asarray([obstacle_array -  s_t[0:self.dim_euclid,0:].T]),axis=-1).T   # num_obs x 1
+        cost_obs = jnp.where(dist_to_obs < self.obs_r + self.robot_r + self.obs_buffer,1.0,0)*self.collision_cost_weight
         cost_obs = jnp.sum(cost_obs,axis=0)
-        dist_to_goal =    jnp.linalg.norm( s_t - goal_pose )
-        is_reached = is_goal_reached*jnp.where(dist_to_goal<=self.goal_tolerance,0.0,1)
-        cost_to_goal = is_reached*dist_to_goal*self.stage_goal_cost_weight*1.0 
-        final_cost = cost_obs + cost_to_goal 
-        return final_cost,is_reached
+        
+        # orientation error to goal and associated cost
+        dist_to_goal_orient = jnp.linalg.norm( s_t[-1,0] - goal_pose[-1] )
+        is_reached_orient  = (1-is_reached_orient)*jnp.where(dist_to_goal_orient<=self.goal_tolerance_orient,1.0,0.0)
+        cost_to_goal_orient = (1-is_reached_orient)*dist_to_goal_orient*self.stage_goal_cost_weight_orient*1.0 
+        
+        # euclideand distance to goal and associated cost
+        dist_to_goal =    jnp.linalg.norm( s_t[0:self.dim_euclid,0] - goal_pose[0:self.dim_euclid] )
+        is_reached = (1-is_goal_reached)*jnp.where(dist_to_goal<=self.goal_tolerance,1.0,0.0)
+        cost_to_goal = (1-is_goal_reached)*dist_to_goal*self.stage_goal_cost_weight*1.0 
+        
+        final_cost = cost_obs + cost_to_goal + cost_to_goal_orient
+        return final_cost,is_reached,is_reached_orient
     
     @functools.partial(jax.jit, static_argnums=0)
-    def terminal_cost(self,s_t,is_goal_reached,goal_pose,obstacle_array):
+    def terminal_cost(self,s_t,is_goal_reached,is_reached_orient,goal_pose,obstacle_array):
         # goal tolerance 
-        dist_to_goal =    jnp.linalg.norm( s_t - goal_pose )
-        final_terminal_cost = dist_to_goal*is_goal_reached*self.terminal_goal_cost_weight
+        dist_to_goal =    jnp.linalg.norm( s_t[0:self.dim_euclid] - goal_pose[0:self.dim_euclid] )
+        dist_to_goal_orient = jnp.linalg.norm( s_t[-1,0] - goal_pose[-1] )
+        
+        final_terminal_cost = dist_to_goal*(1-is_goal_reached)*self.terminal_goal_cost_weight + dist_to_goal_orient*(1-is_reached_orient)*self.terminal_goal_cost_weight_orient
         return final_terminal_cost   
     
     
